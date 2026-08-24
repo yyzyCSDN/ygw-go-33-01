@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"strings"
 	"sync"
 	"time"
 
@@ -36,12 +37,36 @@ func New(maxEntries int) *Cache {
 	}
 }
 
+// normalizeKey lowercases the name and strips a trailing dot, mirroring
+// record.CanonicalName. The cache must key every case/spelling variant of a
+// name onto the same entry; otherwise an upsert and a query spelled in
+// different cases would hit different cache slots and the query would keep
+// returning the stale value cached before the update.
+func normalizeKey(name string) string {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	return strings.TrimSuffix(lower, ".")
+}
+
 func cacheKey(name string, rtype model.RecordType, nxdomain bool) string {
 	kind := "pos"
 	if nxdomain {
 		kind = "neg"
 	}
-	return name + "\x00" + rtype.String() + "\x00" + kind
+	return normalizeKey(name) + "\x00" + rtype.String() + "\x00" + kind
+}
+
+// Invalidate drops every cached entry (positive and negative, all types) for
+// the given name, so a freshly applied record change is visible to all
+// queries immediately instead of waiting for the old entry's TTL to elapse.
+func (c *Cache) Invalidate(name string) {
+	prefix := normalizeKey(name) + "\x00"
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for key := range c.entries {
+		if strings.HasPrefix(key, prefix) {
+			delete(c.entries, key)
+		}
+	}
 }
 
 func (c *Cache) Get(name string, rtype model.RecordType, nxdomain bool) (Result, bool) {

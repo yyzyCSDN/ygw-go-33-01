@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 
+	"zonedns/internal/cache"
 	"zonedns/internal/journal"
 	"zonedns/internal/metric"
 	"zonedns/internal/model"
@@ -17,14 +18,16 @@ type Service struct {
 	journal  journal.Durability
 	transfer *transfer.Service
 	metrics  *metric.Metrics
+	cache    *cache.Cache
 }
 
-func New(zones *zone.Store, durability journal.Durability, transfers *transfer.Service, metrics *metric.Metrics) *Service {
+func New(zones *zone.Store, durability journal.Durability, transfers *transfer.Service, metrics *metric.Metrics, responseCache *cache.Cache) *Service {
 	return &Service{
 		zones:    zones,
 		journal:  durability,
 		transfer: transfers,
 		metrics:  metrics,
+		cache:    responseCache,
 	}
 }
 
@@ -57,6 +60,13 @@ func (s *Service) Apply(zoneName string, ch model.Change) error {
 	if err := staged.Commit(); err != nil {
 		staged.Rollback()
 		return fmt.Errorf("apply failed: commit: %w", err)
+	}
+	// Drop any cached response for the affected name so queries see the new
+	// value immediately instead of a stale entry cached before the update.
+	// Applies to both upserts (old positive answer) and deletes (promote a
+	// previously cached NX/negative back to authoritative resolution).
+	if s.cache != nil {
+		s.cache.Invalidate(staged.Applied().Name)
 	}
 	if err := s.transfer.NotifyZone(zoneName, z.Serial()); err != nil {
 		return fmt.Errorf("apply succeeded but notify failed: %w", err)

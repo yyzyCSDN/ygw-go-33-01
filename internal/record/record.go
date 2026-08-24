@@ -27,7 +27,11 @@ func (s *Store) Apply(ch model.Change) (model.Record, error) {
 	if err := ValidateRecord(ch.Record); err != nil {
 		return model.Record{}, err
 	}
-	name := ch.Record.Name
+	// Normalize the name on write so every case/spelling variant of a record
+	// maps to the same canonical key used by Lookup. Without this, an upsert
+	// for "WWW.example.com" and one for "www.example.com" would be stored as
+	// two separate records, and updates would silently fork by case.
+	name := CanonicalName(ch.Record.Name)
 	record := ch.Record
 	record.Name = name
 	s.mu.Lock()
@@ -37,10 +41,17 @@ func (s *Store) Apply(ch model.Change) (model.Record, error) {
 		byType = make(map[model.RecordType][]model.Record)
 		s.records[name] = byType
 	}
-	kept := byType[ch.Record.Type][:0]
-	for _, existing := range byType[ch.Record.Type] {
-		if existing.RData != record.RData {
-			kept = append(kept, existing)
+	// For a delete, drop only the matching rdata value; for an upsert, the new
+	// value replaces every existing record of the same name+type so a re-issue
+	// with different rdata retires the old value rather than leaving it as a
+	// stale sibling that would resurface on query.
+	var kept []model.Record
+	if ch.Kind == model.ChangeDelete {
+		kept = byType[ch.Record.Type][:0]
+		for _, existing := range byType[ch.Record.Type] {
+			if existing.RData != record.RData {
+				kept = append(kept, existing)
+			}
 		}
 	}
 	if ch.Kind == model.ChangeDelete {

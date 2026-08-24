@@ -127,11 +127,11 @@ func buildApplication(journalDir string) *application {
 		}
 		durability = fileJournal
 	}
-	updates := update.New(zones, durability, transfers, metrics)
+	responseCache := cache.New(2048)
+	updates := update.New(zones, durability, transfers, metrics, responseCache)
 	if err := journal.Replay(durability, updates); err != nil {
 		log.Fatalf("replay journal: %v", err)
 	}
-	responseCache := cache.New(2048)
 	resolverService := resolver.New(zones, responseCache, signerService, metrics)
 	controlService := control.New(zones, signerService, transfers, metrics)
 	secondaries := zone.NewStore()

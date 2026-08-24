@@ -7,6 +7,7 @@ import (
 	"zonedns/internal/message"
 	"zonedns/internal/metric"
 	"zonedns/internal/model"
+	"zonedns/internal/record"
 	"zonedns/internal/signer"
 	"zonedns/internal/zone"
 )
@@ -27,12 +28,12 @@ func (r *Resolver) Resolve(query model.Query) (model.Answer, error) {
 		if r.metric != nil {
 			r.metric.IncCacheHit()
 		}
-		return model.Answer{
-			Name:  query.Name,
-			Type:  query.Type,
-			TTL:   result.TTL,
-			RData: result.Records[0].RData,
-		}, nil
+		// Derive the answer from the cached records with the same selection
+		// rule used on a cache miss. Returning Records[0] here would diverge
+		// from answerForRecords (which may pick a different record in a
+		// multi-valued RRset), so the same query could answer differently
+		// before and after the cache was warmed.
+		return answerForRecords(query, result.Records), nil
 	}
 	if result, ok := r.cache.Get(query.Name, query.Type, true); ok && result.NXDomain {
 		if r.metric != nil {
@@ -91,11 +92,17 @@ func (r *Resolver) resolveAuthoritative(query model.Query) (model.Answer, error)
 }
 
 func (r *Resolver) findZone(name string) (string, *zone.Zone, error) {
+	// Normalize the query name before matching it against zone names: DNS is
+	// case-insensitive, and matching on the raw query would let a mixed-case
+	// query such as "WWW.EXAMPLE.COM" slip past the authoritative zone for
+	// "example.com" and resolve as NXDOMAIN.
+	canon := record.CanonicalName(name)
 	names := r.zones.List()
 	best := ""
 	for _, candidate := range names {
-		if name == candidate || len(name) > len(candidate) && name[len(name)-len(candidate)-1] == '.' && name[len(name)-len(candidate):] == candidate {
-			if len(candidate) > len(best) {
+		c := record.CanonicalName(candidate)
+		if canon == c || len(canon) > len(c) && canon[len(canon)-len(c)-1] == '.' && canon[len(canon)-len(c):] == c {
+			if len(c) > len(best) {
 				best = candidate
 			}
 		}
