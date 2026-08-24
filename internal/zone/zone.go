@@ -118,6 +118,11 @@ func (s *StagedChange) Commit() error {
 		return fmt.Errorf("staged change already committed")
 	}
 	s.zone.mu.Lock()
+	// Every committed record change must advance the zone serial so that
+	// secondaries can detect new data via IXFR. meta.SOA.Serial is kept in
+	// sync so AXFR snapshots carry the bumped serial too.
+	s.zone.serial = NextSerial(s.zone.serial)
+	s.zone.meta.SOA.Serial = s.zone.serial
 	s.zone.version++
 	s.zone.history = append(s.zone.history, historyEntry{serial: s.zone.serial, change: s.change})
 	changed := []string{s.applied.Name}
