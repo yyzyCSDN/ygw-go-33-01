@@ -88,6 +88,7 @@ func (z *Zone) StageChange(ch model.Change) (*StagedChange, error) {
 	}
 	serialBefore := z.serial
 	versionBefore := z.version
+	historyBefore := len(z.history)
 	return &StagedChange{
 		zone:          z,
 		change:        ch,
@@ -95,6 +96,7 @@ func (z *Zone) StageChange(ch model.Change) (*StagedChange, error) {
 		before:        before,
 		serialBefore:  serialBefore,
 		versionBefore: versionBefore,
+		historyBefore: historyBefore,
 		committed:     false,
 	}, nil
 }
@@ -106,6 +108,7 @@ type StagedChange struct {
 	before        map[string]map[model.RecordType][]model.Record
 	serialBefore  uint32
 	versionBefore uint64
+	historyBefore int
 	committed     bool
 }
 
@@ -144,8 +147,15 @@ func (s *StagedChange) Rollback() {
 	}
 	s.zone.mu.Lock()
 	defer s.zone.mu.Unlock()
+	// Restore the in-memory record store and zone bookkeeping to the
+	// pre-stage state so that a failed apply leaves no visible trace.
+	s.zone.records.Restore(s.before)
 	s.zone.serial = s.serialBefore
+	s.zone.meta.SOA.Serial = s.serialBefore
 	s.zone.version = s.versionBefore
+	if len(s.zone.history) > s.historyBefore {
+		s.zone.history = s.zone.history[:s.historyBefore]
+	}
 }
 
 func (z *Zone) bumpSerialLocked() {

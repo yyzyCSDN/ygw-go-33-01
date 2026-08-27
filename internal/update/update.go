@@ -42,6 +42,10 @@ func (s *Service) Apply(zoneName string, ch model.Change) error {
 	if err != nil {
 		return fmt.Errorf("apply failed: %w", err)
 	}
+	// StageChange mutates the in-memory record store in place; any failure
+	// from here until Commit succeeds must roll that staged state back so a
+	// failed apply does not leave uncommitted changes visible to readers.
+	defer staged.Rollback()
 	entry := journal.Entry{
 		Zone:   zoneName,
 		Serial: z.Serial(),
@@ -56,6 +60,9 @@ func (s *Service) Apply(zoneName string, ch model.Change) error {
 	if err := staged.Commit(); err != nil {
 		return fmt.Errorf("apply failed: commit: %w", err)
 	}
+	// Commit succeeded: the update is now durable and visible. The deferred
+	// Rollback is a no-op from here because Commit marks the change committed,
+	// so a notify failure does not roll the committed state back.
 	if err := s.transfer.NotifyZone(zoneName, z.Serial()); err != nil {
 		return fmt.Errorf("apply succeeded but notify failed: %w", err)
 	}
