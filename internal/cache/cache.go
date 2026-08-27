@@ -46,6 +46,13 @@ func cacheKey(name string, rtype model.RecordType, nxdomain bool) string {
 
 func (c *Cache) Get(name string, rtype model.RecordType, nxdomain bool) (Result, bool) {
 	key := cacheKey(name, rtype, nxdomain)
+	// Hold the read lock for the whole lookup so a concurrent SweepExpired or
+	// Put cannot mutate or delete the entry mid-read. Without this, a sweep
+	// running between the map lookup and the field reads could nil out e.data
+	// (or delete the entry), causing a torn read: a hit that returns empty or
+	// panic-inducing nil records.
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	e := c.entries[key]
 	if e == nil {
 		return Result{}, false
@@ -75,7 +82,11 @@ func (c *Cache) SweepExpired(now time.Time) int {
 	removed := 0
 	for key, e := range c.entries {
 		if e.expired(now) {
-			e.data = nil
+			// Only drop the entry from the map. A concurrent Get that already
+			// holds the read lock is reading this same *entry; clearing e.data
+			// in place would tear that read (nil-out mid-lookup), yielding a
+			// hit with empty records. Once removed from the map no new reader
+			// can find it, while in-flight readers keep their own snapshot.
 			delete(c.entries, key)
 			removed++
 		}
