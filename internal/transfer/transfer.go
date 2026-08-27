@@ -134,7 +134,10 @@ func (s *Service) buildDelta(z ZoneLike, fromSerial uint32) (model.Delta, error)
 	}
 	ops := make([]model.DeltaOp, 0, len(changes))
 	for _, ch := range changes {
-		ops = append(ops, model.DeltaOp{Kind: model.ChangeUpsert, Record: ch.Record})
+		// Preserve the change kind so a delete on the primary is replayed as a
+		// delete on the secondary, rather than being turned into an upsert that
+		// silently re-adds the removed record.
+		ops = append(ops, model.DeltaOp{Kind: ch.Kind, Record: ch.Record})
 	}
 	return model.Delta{
 		Zone:  z.Name(),

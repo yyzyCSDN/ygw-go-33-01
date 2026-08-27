@@ -173,7 +173,12 @@ func (z *Zone) ChangesSince(from uint32) ([]model.Change, bool) {
 }
 
 func (z *Zone) DeltaRangeFor(from uint32) model.SerialRange {
-	return RangeBetween(z.Serial(), from)
+	// The delta carries a secondary from its current serial (`from`) up to the
+	// primary's current serial. Start must equal the secondary's serial so the
+	// receiver's serial-match check passes, and End is the new serial it must
+	// advance to. `from` is Start and the primary serial is End — not the
+	// reverse.
+	return RangeBetween(from, z.Serial())
 }
 
 func (z *Zone) ApplyDelta(delta model.Delta) error {
